@@ -9,12 +9,12 @@ global bonesdata
 bonesdata = []
 
 #Import a model from a vmesh_c file
-def import_file(path):
+def import_file(context, filepath, *, add_hitboxes, global_matrix):
     importlib.reload(pyVRF)
     print('Reloading pyVRF...')
 
     #Get the data
-    blocks = pyVRF.readBlocks( path )
+    blocks = pyVRF.readBlocks( filepath )
     vbib = blocks['VBIB']
 
     #Go to object mode before doing anything
@@ -25,10 +25,11 @@ def import_file(path):
     meshObject = addGeometry( vbib )
 
     #Add skeleton
-    skeleton = addSkeleton( blocks['DATA'], meshObject )
+    skeleton = addSkeleton(blocks['DATA'], meshObject, global_matrix)
 
     #Add hitboxes
-    addHitboxes( blocks['DATA'], skeleton )
+    if add_hitboxes:
+        addHitboxes( blocks['DATA'], skeleton )
 
     #add rigging
     addRig(meshObject, skeleton, vbib)
@@ -40,10 +41,11 @@ def addGeometry( data ):
     ob = bpy.data.objects.new('MeshObject', me)
     ob.location = (0,0,0)
     # Link object to scene
-    scn = bpy.context.scene
-    scn.objects.link(ob)
-    scn.objects.active = ob
-    scn.update()
+    view_layer = bpy.context.view_layer
+    collection = view_layer.active_layer_collection.collection
+    collection.objects.link(ob)
+    view_layer.objects.active = ob
+    view_layer.update()
  
     # Create mesh from given verts, edges, faces. Either edges or
     # faces should be [], or you ask for problems
@@ -51,32 +53,46 @@ def addGeometry( data ):
     indices = data["indexdata"][0]
     #print(indices)
     me.from_pydata(vertices, [], indices)
+
+    # Add smooth for polygons
+    for p in me.polygons:
+        p.use_smooth = True
  
     # Update mesh with new data
     me.update(calc_edges=False)
-    scn.update()
+    view_layer.update()
     #uv texcoords
-    me.uv_textures.new()
-    uv_data = me.uv_layers[0].data
+    # me.uv_textures.new()
+    uv_data = me.uv_layers.new().data
     for i in range(len(uv_data)):
         uv_data[i].uv = data["vertexdata"][0]["texcoords"][me.loops[i].vertex_index]
-    scn.update()
+    view_layer.update()
     return ob
 
 #Add a skeleton to the scene, returns the created skeleton
-def addSkeleton( data, mesh ):
+def addSkeleton( data, mesh, global_matrix):
 
     #Fetch scene
-    scn = bpy.context.scene
+    view_layer = bpy.context.view_layer
+    collection = view_layer.active_layer_collection.collection
 
     #Make armature
     armature = bpy.data.armatures.new('Armature')
     obj = bpy.data.objects.new('Armature', armature)
+
+    # Set armature a parent for mesh
+    mesh.parent = obj
+
+    # Apply global matrix
+    obj.matrix_world = global_matrix
+
+    # Add X-ray for bones
+    obj.show_in_front = True
     
     #Link the armature object in the scene and select it
-    scn.objects.link(obj)
-    scn.objects.active = obj
-    obj.select = True
+    collection.objects.link(obj)
+    view_layer.objects.active = obj
+    obj.select_set(True)
     
     #Go to edit mode to access edit bones
     bpy.ops.object.mode_set(mode='EDIT')
@@ -85,7 +101,7 @@ def addSkeleton( data, mesh ):
     bones = {}
     for bone in data['m_skeleton']['m_bones']:
         #Add the new bone
-        newBone = armature.edit_bones.new( bone['m_boneName'] )
+        newBone = armature.edit_bones.new(name=bone['m_boneName'] )
         newBone.use_relative_parent = True
 
         #Set parent
@@ -125,10 +141,12 @@ def addSkeleton( data, mesh ):
         bones[bone['m_boneName']] = newBone
 
         #Add vertex group for the current bone
-        mesh.vertex_groups.new(bone['m_boneName'])
+        mesh.vertex_groups.new(name=bone['m_boneName'])
 
         #global bonesdata array. Fix/Change?
         bonesdata.append(bone['m_boneName'])
+
+    bpy.ops.object.mode_set(mode='OBJECT', toggle=False)
 
     return obj
 
@@ -146,7 +164,7 @@ def addHitboxes( data, skeleton ):
             #Create new empty cube
             bpy.ops.object.add(type='EMPTY')
             empty = bpy.context.active_object
-            empty.empty_draw_type = 'CUBE'
+            empty.empty_display_type = 'CUBE'
             empty.name = groupname+"/"+hitbox['m_name']
 
             #Attach to its parent
